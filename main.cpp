@@ -1,5 +1,6 @@
 #include <opencv2/core.hpp>
 #include <opencv2/highgui.hpp>
+#include <opencv2/imgproc/imgproc.hpp>
 
 #include <GLFW/glfw3.h>
 #include <stdio.h>
@@ -73,22 +74,59 @@ int main() {
     if (currentTime - lastFrameTime >= dureeFrame) {
       // on stocke l'image dans une matrice
       Mat frame;
+      Mat grey;
+      Mat blur;
+      Mat binary;
+      Mat colored;
       video >> frame;
-
-      //lastFrameTime = currentTime; // on ne fait pas ça car ça ne nous permet pas de rattraper le retard s'il y en a 
-      lastFrameTime += dureeFrame;
-
       if (frame.empty()) {
         break;
       }
-      else {
-        // remplis la texture avec ces pixels
-        cv::flip(frame, frame, 0);
-        glTexImage2D(GL_TEXTURE_2D, 0,  GL_RGB, frame.cols, frame.rows, 0, GL_BGR, GL_UNSIGNED_BYTE, frame.data);
+      //lastFrameTime = currentTime; // on ne fait pas ça car ça ne nous permet pas de rattraper le retard s'il y en a 
+      lastFrameTime += dureeFrame;
 
+
+
+      // 1. PRETRAITEMENT 
+      cv::flip(frame, frame, 0);
+      // transforme la frame en niveau de gris pour que ce soit moins lourd 
+      cvtColor(frame, grey, COLOR_BGR2GRAY);
+      //flou gaussien
+      GaussianBlur(grey, blur, cv::Size(9, 9), 0);
+
+      // 2. SEGMENTATION
+      // seuil avec otsu : renvoie une image binaire avec seuil choisi automatiquement
+      double seuil = threshold(blur, binary, 0, 255, THRESH_BINARY | THRESH_OTSU);
+
+      
+      // 3. GEOMETRIE
+      vector<vector<Point>> contours;
+      double maxArea= 0.0;
+      int maxAreaIndex;
+      // trouve tous les contours des zones blanches détectées par otsu
+      findContours(binary, contours, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);
+      // on garde la zone qui a la plus grande aire (feuille A4)
+      for (int i =0; i<contours.size(); i++) {
+        double area = contourArea(contours[i]);
+        if (area > maxArea) {
+          maxArea = area;
+          maxAreaIndex = i;
+        }
       }
+      //cout << "aire : " << maxArea << endl;
+      //cout << "index : " << maxAreaIndex << endl;
 
+      // on dessine le contour de la feuille sur l'image originale frame
+      drawContours(frame, contours, maxAreaIndex, Scalar(0, 0, 255), 2);
+
+
+
+
+
+      // remplis la texture avec ces pixels
+      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, frame.cols, frame.rows, 0, GL_BGR, GL_UNSIGNED_BYTE, frame.data);
     }
+
     // on dessine le carré dans lequel on va mettre la texture
     glBegin(GL_QUADS);
       glTexCoord2f(0, 0); glVertex2f(-1, -1);   // coin bas gauche
