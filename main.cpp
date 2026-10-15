@@ -29,7 +29,8 @@ int main() {
 
   // on ouvre la video 
   VideoCapture video;
-  video.open("/Users/emilieb/Desktop/POLYTECH/Marseille/5A/RA/input.mp4");
+  //video.open("/Users/emilieb/Desktop/POLYTECH/Marseille/5A/RA/input.mp4");
+  video.open(0);
   if (!video.isOpened()) { 
     fprintf(stderr, "ERROR: could not open video\n"); 
     return 1; 
@@ -59,6 +60,9 @@ int main() {
   double lastFrameTime = 0;
   double currentTime;
 
+  // liste des corners sauvegardés
+  vector<Point2f> prevCorners;
+
   // tant qu'on ne ferme pas la fenêtre (1 boucle, 1 image)
   while (!glfwWindowShouldClose(window)) {
     // fond de couleur
@@ -84,12 +88,14 @@ int main() {
       }
       //lastFrameTime = currentTime; // on ne fait pas ça car ça ne nous permet pas de rattraper le retard s'il y en a 
       lastFrameTime += dureeFrame;
-
+      // pour que la camera soit pas inversé (miroir)
+      flip(frame, frame, 1);
 
 
       // 1. PRETRAITEMENT 
+      // pour que l'origine de opencv et opengl concorde (flip horizontal)
       cv::flip(frame, frame, 0);
-      // transforme la frame en niveau de gris pour que ce soit moins lourd 
+      // transforme la frame en niveau de gris 
       cvtColor(frame, grey, COLOR_BGR2GRAY);
       //flou gaussien
       GaussianBlur(grey, blur, cv::Size(9, 9), 0);
@@ -103,6 +109,7 @@ int main() {
       vector<vector<Point>> contours;
       double maxArea= 0.0;
       int maxAreaIndex;
+
       // trouve tous les contours des zones blanches détectées par otsu
       findContours(binary, contours, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);
       // on garde la zone qui a la plus grande aire (feuille A4)
@@ -117,9 +124,99 @@ int main() {
       //cout << "index : " << maxAreaIndex << endl;
 
       // on dessine le contour de la feuille sur l'image originale frame
-      drawContours(frame, contours, maxAreaIndex, Scalar(0, 0, 255), 2);
+      //drawContours(frame, contours, maxAreaIndex, Scalar(0, 0, 255), 2);
+
+      vector<Point> corners(4);
+      double epsilon = 0.02 * arcLength(contours[maxAreaIndex], true);
+      // transforme le contour en un polygone : corners contient les quatres coins
+      approxPolyDP(contours[maxAreaIndex], corners, epsilon, true);
+      // on remplit/dessine le polygone sur la feuille
+      //polylines(frame, corners, true, Scalar(255, 0, 0), 5); 
+      fillConvexPoly(frame, corners, Scalar(255,0,0));
+
+      vector<Point2f> orderedCorners(4);
+      double smallestCoord = 10000;
+      int smallestCoordIdx;
+      vector<Point2f> newOrderedCorners(4);
+      // cas 1ere frame : on détermine l'ordre des coins et leurs coordonnées
+      if (prevCorners.empty()) {
+        // on recupere chacun des quatres coins
+        for (int i=0; i<corners.size(); i++){
+          if (norm(corners[i].x + corners[i].y) <= smallestCoord){
+            smallestCoord = corners[i].x + corners[i].y;
+            smallestCoordIdx = i;
+          }
+        }
+        // on défini le coin en haut à gauche tel que le que premier corner 
+        orderedCorners[0] = corners[smallestCoordIdx];
+        for (int i = 1; i<corners.size(); i++) {
+          int index = (smallestCoordIdx + i) % corners.size();
+          orderedCorners[i] = corners[index];
+        }
+/*
+        Point2f corner1 = orderedCorners[0];
+        Point2f corner2 = orderedCorners[1];
+        Point2f corner3 = orderedCorners[2];
+        Point2f corner4 = orderedCorners[3];
+
+        cout << "corner 1 : " << corner1 << endl;
+        cout << "corner 2 : " << corner2 << endl;
+        cout << "corner 3 : " << corner3 << endl;
+        cout << "corner 4 : " << corner4 << endl;
+*/
+      }
+      // cas toutes les autres frames : on détermine les points via leur position dans la frame précedente
+      else {
+        for (int i=0; i<corners.size(); i++){
+          float diffMin = 10000000.f;
+          int diffMinIdx;
+          for (int j=0; j<prevCorners.size(); j++){
+            float diffX = corners[i].x - prevCorners[j].x;
+            float diffY = corners[i].y - prevCorners[j].y;
+            float diff = diffX*diffX + diffY*diffY;
+            if (diff < diffMin) {
+              diffMin = diff;
+              diffMinIdx = j;
+            }
+          }
+          newOrderedCorners[diffMinIdx] = corners[i];
+        }
+        orderedCorners = newOrderedCorners;
+      }
+      prevCorners = orderedCorners;
+
+      //rgb 
+      circle(frame, newOrderedCorners[0], 10, Scalar(0, 255, 255), FILLED);
+      circle(frame, newOrderedCorners[1], 10, Scalar(0, 255, 0), FILLED);
+      circle(frame, newOrderedCorners[2], 10, Scalar(255, 0, 0), FILLED);
+      circle(frame, newOrderedCorners[3], 10, Scalar(255, 0, 255), FILLED);
+
+/*
+      Point2f corner1 = orderedCorners[0];
+      Point2f corner2 = orderedCorners[1];
+      Point2f corner3 = orderedCorners[2];
+      Point2f corner4 = orderedCorners[3];
+
+      cout << "corner 1 : " << corner1 << endl;
+      cout << "corner 2 : " << corner2 << endl;
+      cout << "corner 3 : " << corner3 << endl;
+      cout << "corner 4 : " << corner4 << endl;
+*/
 
 
+      // création des points virtuels
+      vector <Point3f> virtualPoints = {
+        {0.f, 0.f, 0.f}, // point central
+        {-148.5f, 105.f, 0.f}, // point haut gauche
+        {-148.5f, -105.f, 0.f}, // point bas gauche
+        {148.5f, -105.f, 0.f}, // point bas droite
+        {148.5f, 105.f, 0.f} // point haut droite
+      };
+      Point3f sheetCenter = virtualPoints[0];
+      Point3f virtCorner1 = virtualPoints[1];
+      Point3f virtCorner2 = virtualPoints[2];
+      Point3f virtCorner3 = virtualPoints[3];
+      Point3f virtCorner4 = virtualPoints[4];      
 
 
 
